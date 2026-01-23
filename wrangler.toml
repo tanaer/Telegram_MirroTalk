@@ -1,0 +1,20 @@
+name = "telegram-mirrotalk"
+main = "worker.js"
+compatibility_date = "2023-10-30"
+
+# KV Namespace binding
+# You need to create a KV namespace named "MirroTalk" in Cloudflare
+# and replace the id below with your namespace ID.
+[[kv_namespaces]]
+binding = "MirroTalk"
+id = "YOUR_KV_NAMESPACE_ID"
+
+[vars]
+# Telegram Bot Token from @BotFather
+ENV_BOT_TOKEN = ""
+
+# A secret token for securing the webhook (random string)
+ENV_BOT_SECRET = ""
+
+# Your Telegram User ID (get from @userinfobot)
+ENV_ADMIN_UID = ""
