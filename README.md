@@ -27,6 +27,7 @@ The following environment variables are required (you can fill these in `wrangle
 - `ENV_BOT_TOKEN`: Your Telegram Bot Token (from @BotFather).
 - `ENV_BOT_SECRET`: A random secret string for webhook security (e.g. a UUID).
 - `ENV_ADMIN_UID`: Your Telegram User ID (from @userinfobot).
+- `ENV_MAP_TTL_DAYS` (Optional): Message mapping expiration time (days). Determines how long you can reply to a user's message. Default is 7 days.
 
 **KV Namespace**:
 You need to create a KV Namespace named `MirroTalk` and bind it to the worker.
@@ -47,6 +48,19 @@ This bot includes a robust anti-harassment system designed to protect the admin 
 3.  **Shadowban**: 
     - Admin can use `/block` to shadowban a user.
     - The user will not know they are blocked, but their messages will no longer be forwarded.
+
+## Cloudflare Free Tier Limitations & Optimizations
+
+The Cloudflare Workers KV free tier has specific limits:
+1.  **Storage**: 1GB
+2.  **Write Operations**: 1,000 per day
+
+This system is optimized to handle these limits:
+- **Auto-Expiration (TTL)**: All message mapping records automatically expire after 7 days (default). This ensures KV storage is never permanently filled. You can adjust this via the `ENV_MAP_TTL_DAYS` environment variable.
+- **Space Reclamation**: Unblocking (`/unblock`) and untrusting (`/untrust`) operations directly **delete** data from KV instead of marking it as invalid, freeing up space immediately.
+- **Write Conservation**: Deduplication and blacklist filtering prevent spam from triggering KV write operations, saving your daily write quota.
+
+**Note**: If your bot processes more than 1,000 valid interactions (forwards + replies) per day, we recommend upgrading to the Cloudflare Workers Paid Plan ($5/mo).
 
 ## Setup Instructions
 

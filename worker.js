@@ -14,6 +14,11 @@ const BLACKLIST_KEYWORDS = [
 
 // 2. 消息去重过期时间 (秒)，默认7天。
 const DEDUPE_TTL = 7 * 24 * 3600; 
+// 3. 消息映射过期时间 (秒)，默认7天。
+// 这意味着管理员只能在7天内回复用户的消息，过期后无法通过回复原消息来发送。
+// 这可以有效防止 KV 空间耗尽。
+// 可通过环境变量 ENV_MAP_TTL_DAYS 自定义 (单位: 天)
+const MAP_TTL = (typeof ENV_MAP_TTL_DAYS !== 'undefined') ? (parseInt(ENV_MAP_TTL_DAYS) * 24 * 3600) : 7 * 24 * 3600;
 // ----------------
 
 // 工具：计算文本的 SHA-256 哈希值
@@ -164,7 +169,7 @@ async function onMessage (message) {
     if(/^\/untrust$/.exec(message.text)){
         let guestChantId = await MirroTalk.get('msg-map-' + message.reply_to_message.message_id, { type: "json" })
         if(guestChantId){
-            await MirroTalk.put('verified-' + guestChantId, false)
+            await MirroTalk.delete('verified-' + guestChantId)
             return sendMessage({ chat_id: ADMIN_UID, text: `❎ UID:${guestChantId} 已移除信任。` })
         }
         return;
@@ -228,7 +233,7 @@ async function handleTextMessage(message, chatId) {
     message_id:message.message_id
   })
   if (forwardReq.ok) {
-    await MirroTalk.put('msg-map-' + forwardReq.result.message_id, chatId)
+    await MirroTalk.put('msg-map-' + forwardReq.result.message_id, chatId, { expirationTtl: MAP_TTL })
   }
 }
 
@@ -245,7 +250,7 @@ async function handleMediaMessage(message, chatId) {
         message_id:message.message_id
       })
       if (forwardReq.ok) {
-        await MirroTalk.put('msg-map-' + forwardReq.result.message_id, chatId)
+        await MirroTalk.put('msg-map-' + forwardReq.result.message_id, chatId, { expirationTtl: MAP_TTL })
       }
       return new Response('Ok');
   }
@@ -275,7 +280,7 @@ async function handleMediaMessage(message, chatId) {
               text: `[🖼️ 图片拦截提醒]\n用户(UID:${chatId}) 发送的图片已被丢弃，附文:\n${caption}`
           });
           if(sentMsg.ok){
-              await MirroTalk.put('msg-map-' + sentMsg.result.message_id, chatId);
+              await MirroTalk.put('msg-map-' + sentMsg.result.message_id, chatId, { expirationTtl: MAP_TTL });
           }
       }
   }
@@ -305,7 +310,7 @@ async function handleUnBlock(message){
   let guestChantId = await MirroTalk.get('msg-map-' + message.reply_to_message.message_id,
   { type: "json" })
 
-  await MirroTalk.put('isblocked-' + guestChantId, false)
+  await MirroTalk.delete('isblocked-' + guestChantId)
 
   return sendMessage({
     chat_id: ADMIN_UID,

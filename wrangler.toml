@@ -18,3 +18,7 @@ ENV_BOT_SECRET = ""
 
 # Your Telegram User ID (get from @userinfobot)
 ENV_ADMIN_UID = ""
+
+# Message mapping expiration time in DAYS (default: 7 days)
+# Determines how long you can reply to a user's message.
+ENV_MAP_TTL_DAYS = 7
