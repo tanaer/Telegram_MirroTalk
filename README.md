@@ -2,70 +2,114 @@
 
 [English](README.md) | [中文](README_ZH.md)
 
-A Telegram message forwarding bot based on Cloudflare Workers, integrated with anti-harassment and anti-fraud features.
+基于 Cloudflare Workers 的 Telegram 消息转发机器人，集成防骚扰和反诈骗功能。
 
-## Features
+## 功能特点
 
-- **Serverless**: Runs on Cloudflare Workers, low cost and high availability.
-- **Message Forwarding**: Forwards messages from users to the admin.
-- **Anti-Harassment & Anti-Fraud**:
-  - **Keyword Filtering**: Automatically drops messages containing blacklisted keywords (e.g., '刷单', '兼职', 'USDT').
-  - **Media Verification**: Unverified users cannot send media (photos, videos). They must pass a "I am human" button verification.
-  - **Deduplication**: Prevents duplicate messages within a 7-day period.
-  - **Block/Trust System**: Admin can block users (`/block`) or add them to a whitelist (`/trust`).
+- **无服务器架构**：运行在 Cloudflare Workers 上，低成本且高可用。
+- **消息转发**：将用户发送给机器人的消息转发给管理员。
+- **防骚扰与反诈骗**：
+  - **关键词过滤**：自动丢弃包含黑名单关键词（如 '刷单', '兼职', 'USDT'）的消息。
+  - **媒体验证**：未验证用户无法发送媒体（图片、视频）。他们必须通过“我是真人”按钮验证后方可发送。
+  - **消息去重**：防止 7 天内的重复消息。
+  - **屏蔽/信任系统**：管理员可以屏蔽用户 (`/block`) 或将其加入白名单 (`/trust`)。
 
-## Deploy to Cloudflare Workers
+## 部署到 Cloudflare Workers
 
 <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/tanaer/Telegram_MirroTalk">
   <img src="https://camo.githubusercontent.com/aa3de9a0130879a84691a2286f5302105d5f3554c5d0af4e3f2f24174eeeea25/68747470733a2f2f6465706c6f792e776f726b6572732e636c6f7564666c6172652e636f6d2f627574746f6e" alt="Deploy to Cloudflare Workers" />
 </a>
 
-### Configuration
+### 配置
 
-The following environment variables are required (you can fill these in `wrangler.toml` or during deployment):
+需要以下环境变量（可以在 `wrangler.toml` 中填写或在部署时配置）：
 
-- `ENV_BOT_TOKEN`: Your Telegram Bot Token (from @BotFather).
-- `ENV_BOT_SECRET`: A random secret string for webhook security (e.g. a UUID).
-- `ENV_ADMIN_UID`: Your Telegram User ID (from @userinfobot).
-- `ENV_MAP_TTL_DAYS` (Optional): Message mapping expiration time (days). Determines how long you can reply to a user's message. Default is 7 days.
+- `ENV_BOT_TOKEN`: 你的 Telegram 机器人 Token (从 @BotFather 获取)。
+- `ENV_BOT_SECRET`: 用于 Webhook 安全验证的随机字符串 (例如 UUID)。
+- `ENV_ADMIN_UID`: 你的 Telegram 用户 ID (从 @userinfobot 获取)。用于接收通知。
+- `ENV_SUPERGROUP_ID`: 你的超级群组 ID (以 `-100` 开头)。仅在 `ENV_ENABLE_TOPIC_GROUP` 为 `true` 时需要。
+- `ENV_ENABLE_TOPIC_GROUP` (可选): 设置为 `true` 以开启话题群组模式。默认为 `false` (私聊模式)。
+- `ENV_MAP_TTL_DAYS` (可选): 消息映射过期时间（天）。默认为 7 天。
 
-**KV Namespace**:
-You need to create a KV Namespace named `MirroTalk` and bind it to the worker.
+**KV 命名空间**：
+你需要创建一个名为 `MirroTalk` 的 KV 命名空间并将其绑定到 Worker。
 
-## Anti-Harassment Functionality
+## 运行模式
 
-This bot includes a robust anti-harassment system designed to protect the admin from spam and scams:
+### 1. 私聊模式 (默认)
+机器人直接将用户消息转发到管理员的私聊 (`ENV_ADMIN_UID`) 中。
+- **设置**：只需配置 `ENV_BOT_TOKEN`, `ENV_BOT_SECRET`, 和 `ENV_ADMIN_UID`。
+- **使用**：直接回复转发来的消息即可回复用户。
 
-1.  **Keyword Blacklist**: 
-    - Messages containing suspicious keywords (like "part-time job", "brushing", "USDT", "porn", etc.) are silently ignored.
-    - This filters out the majority of automated spam.
+### 2. 话题群组模式 (推荐用于高并发)
+机器人会在一个超级群组中为每个用户创建一个独立的 **Forum Topic (话题)**。这样可以井井有条地管理大量对话。
 
-2.  **Media Restriction**: 
-    - By default, strangers can only send text messages.
-    - If they try to send images or files, they receive a warning and a verification button.
-    - Only after clicking "I am human" are they allowed to send media. This prevents bot-generated image spam.
+**设置步骤：**
+1.  **环境变量**：
+    - 设置 `ENV_ENABLE_TOPIC_GROUP` 为 `true`。
+    - 设置 `ENV_SUPERGROUP_ID` 为你的群组 ID (如 `-100xxxxxxx`)。
 
-3.  **Shadowban**: 
-    - Admin can use `/block` to shadowban a user.
-    - The user will not know they are blocked, but their messages will no longer be forwarded.
+2.  **Telegram 群组设置**：
+    - 创建一个新的群组（或使用现有群组）。
+    - 将机器人拉入群组并设为**管理员**。
+    - **关键**：机器人必须拥有 **"Manage Topics/管理话题"** 权限。
+    - 在群设置中开启 **Topics (话题)** 功能：
+      - 群组信息 -> 编辑 -> 话题 -> 开启。
+      - *注：这会将群组转换为超级群组。*
 
-## Cloudflare Free Tier Limitations & Optimizations
+3.  **获取群组 ID**：
+    - 将 `@username_to_id_bot` 拉入群组，它会告诉你 ID。
+    - 或者在网页版打开群组，URL 中包含 ID (例如 `#/-100123456789`)。
 
-The Cloudflare Workers KV free tier has specific limits:
-1.  **Storage**: 1GB
-2.  **Write Operations**: 1,000 per day
+## 防骚扰功能详解
 
-This system is optimized to handle these limits:
-- **Auto-Expiration (TTL)**: All message mapping records automatically expire after 7 days (default). This ensures KV storage is never permanently filled. You can adjust this via the `ENV_MAP_TTL_DAYS` environment variable.
-- **Space Reclamation**: Unblocking (`/unblock`) and untrusting (`/untrust`) operations directly **delete** data from KV instead of marking it as invalid, freeing up space immediately.
-- **Write Conservation**: Deduplication and blacklist filtering prevent spam from triggering KV write operations, saving your daily write quota.
+本机器人包含一套强大的防骚扰系统，旨在保护管理员免受垃圾信息和诈骗的侵扰：
 
-**Note**: If your bot processes more than 1,000 valid interactions (forwards + replies) per day, we recommend upgrading to the Cloudflare Workers Paid Plan ($5/mo).
+1.  **关键词黑名单**：
+    - 包含可疑关键词（如“兼职”、“刷单”、“USDT”、“色情”等）的消息会被静默丢弃。
 
-## Setup Instructions
+2.  **动态算术验证**：
+    - 未验证用户必须通过一道动态生成的数学题（如 `3 + 5 = ?`）来证明自己是真人。
+    - 题目动态生成，无法被简单脚本破解。
 
-1.  **Get Token**: Get your bot token from @BotFather.
-2.  **Get UID**: Get your user ID from @username_to_id_bot or similar.
-3.  **Deploy**: Click the "Deploy with Workers" button above.
-4.  **Bind KV**: In Cloudflare Dashboard, go to your Worker -> Settings -> Variables -> KV Namespace Bindings. Add a binding with variable name `MirroTalk` and create a new namespace.
-5.  **Set Webhook**: After deployment, register the webhook by visiting: `https://your-worker-subdomain.workers.dev/registerWebhook`
+3.  **多级安全策略**：
+    - 管理员可通过 `/admin` 菜单切换安全级别：
+      - **Strict (严格)**：未验证用户禁言。
+      - **Standard (标准)**：未验证用户可发纯文本，禁止发媒体（默认）。
+      - **Relaxed (宽松)**：无需验证。
+
+4.  **暗屏蔽 (Shadowban)**：
+    - 管理员可以使用 `/block` 指令对用户进行暗屏蔽。
+    - 用户不会知道自己被屏蔽了，但他们的消息将不再被转发。
+
+## 管理员指令
+
+在超级群组中发送 `/admin` 查看控制面板：
+
+- **/info**：查看当前话题对应的用户信息。
+- **/trust**：永久信任当前用户（跳过验证）。
+- **/block**：屏蔽当前用户。
+- **/unblock**：解除屏蔽。
+- **/broadcast**：回复一条消息进行全员广播。
+- **/security <1|2|3>**：设置安全级别。
+
+## Cloudflare 免费版限制与应对
+
+Cloudflare Workers KV 免费套餐有以下主要限制：
+1.  **存储空间**：1GB
+2.  **写入操作**：每天 1000 次
+
+本系统已针对这些限制进行了深度优化：
+- **自动过期 (TTL)**：所有的消息映射记录都会在 7 天（默认）后自动删除。这确保了 KV 空间永远不会被无限占满。您可以通过 `ENV_MAP_TTL_DAYS` 环境变量调整此时间。
+- **空间回收**：解除屏蔽 (`/unblock`) 和移除信任 (`/untrust`) 操作会直接从 KV 中**删除**数据，而不是标记为无效，从而释放空间。
+- **写入节省**：通过消息去重和黑名单过滤，无效的垃圾消息不会触发 KV 写入操作，节省宝贵的每日写入额度。
+
+**注意**：如果您的机器人每天需要处理超过 1000 条有效交互（转发+回复），建议升级 Cloudflare Workers 付费套餐（$5/月）。
+
+## 安装指南
+
+1.  **获取 Token**：从 @BotFather 获取你的 Bot Token。
+2.  **获取 UID**：从 @username_to_id_bot 或类似机器人获取你的用户 ID。
+3.  **部署**：点击上方的 "Deploy with Workers" 按钮。
+4.  **绑定 KV**：在 Cloudflare 控制台，进入你的 Worker -> Settings -> Variables -> KV Namespace Bindings。添加一个变量名为 `MirroTalk` 的绑定，并创建一个新的命名空间。
+5.  **设置 Webhook**：部署完成后，访问以下链接注册 Webhook：`https://你的-worker-子域名.workers.dev/registerWebhook`
