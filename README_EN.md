@@ -2,7 +2,7 @@
 
 [English](README_EN.md) | [中文](README.md)
 
-基于 Cloudflare Workers 的 Telegram 消息转发机器人，集成防骚扰和反诈骗功能。
+A Telegram message forwarding bot running on Cloudflare Workers, with anti-spam and anti-scam protection.
 
 | 未验证用户联系你，要求验证                                   | 实际不会收到图片                               |
 | ------------------------------------------------------------ | ------------------------------------------------------------ |

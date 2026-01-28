@@ -224,6 +224,9 @@ async function onMessage(message) {
   // 3. 其他 -> 普通用户投稿
   
   if (ENABLE_TOPIC_GROUP && message.chat.id.toString() === SUPERGROUP_ID) {
+    if (!message.from || message.from.id.toString() !== ADMIN_UID) {
+      return new Response('Ok');
+    }
     return handleAdminMessage(message);
   } else if (!ENABLE_TOPIC_GROUP && message.chat.id.toString() === ADMIN_UID) {
     // 旧模式：管理员在私聊中回复
@@ -262,19 +265,31 @@ async function handleAdminMessage(message) {
 
     // 2. 处理回复
     if (ENABLE_TOPIC_GROUP) {
-        // 话题模式：回复话题中的消息
         const topicId = message.message_thread_id;
         if (topicId) {
-            // 从 KV 获取话题对应的用户 ID
-            const userId = await MirroTalk.get(`thread:${topicId}:user`);
-            if (userId) {
-                // 复制消息给用户
+            let userId = await MirroTalk.get(`thread:${topicId}:user`);
+            if ((!userId || userId.toString() === ADMIN_UID) && message.reply_to_message) {
+                const byMsgMap = await MirroTalk.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
+                if (byMsgMap) {
+                    userId = byMsgMap;
+                    await MirroTalk.put(`thread:${topicId}:user`, userId);
+                    await MirroTalk.put(`user:${userId}:topic`, topicId);
+                }
+            }
+
+            if (userId && userId.toString() !== ADMIN_UID) {
                 return copyMessage({
                     chat_id: userId,
                     from_chat_id: message.chat.id,
                     message_id: message.message_id
                 });
             }
+
+            return sendMessage({
+                chat_id: SUPERGROUP_ID,
+                text: '⚠️ 该话题尚未绑定用户或映射异常。请先在本话题里回复一条“来自该用户的转发消息”发送任意内容，系统会自动完成绑定，之后即可自由聊天。',
+                message_thread_id: topicId
+            });
         }
     } else {
         // 私聊模式：回复转发的消息
@@ -397,11 +412,9 @@ async function handleGuestMessage(message) {
         forwardBody.message_thread_id = topicId;
     }
 
-    let forwardReq = await forwardMessage(forwardBody);
-    // 只有在非话题模式下（即直接转发给管理员私聊），才需要保存 msg-map 用于回复
-    // 话题模式下通过 topicId 反查，不需要 msg-map
-    if (!ENABLE_TOPIC_GROUP && forwardReq.ok) {
-        await MirroTalk.put('msg-map-' + forwardReq.result.message_id, chatId, { expirationTtl: MAP_TTL })
+    const forwardReq = await forwardMessage(forwardBody);
+    if (forwardReq.ok) {
+        await MirroTalk.put('msg-map-' + forwardReq.result.message_id, chatId, { expirationTtl: MAP_TTL });
     }
 }
 
