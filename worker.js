@@ -228,6 +228,11 @@ async function onMessage(message) {
   } else if (!ENABLE_TOPIC_GROUP && message.chat.id.toString() === ADMIN_UID) {
     // 旧模式：管理员在私聊中回复
     return handleAdminMessage(message);
+  } else if (message.chat.id.toString() === ADMIN_UID) {
+    // 即使在话题模式下，管理员私聊也应该被视为管理员操作，或者至少不应该被当成普通用户去验证
+    // 这里简单处理：如果是 ADMIN_UID 私聊，但没开 Topic 模式 (上面已处理)
+    // 如果开了 Topic 模式，ADMIN_UID 私聊也走 Admin 逻辑，方便测试指令
+    return handleAdminMessage(message);
   } else {
     // 可以在这里加个判断，如果普通用户 ID === ADMIN_UID 且不是在回复，是否要特殊处理？
     return handleGuestMessage(message);

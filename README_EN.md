@@ -14,17 +14,25 @@
 
 
 
-## 功能特点
+## Features
 
-- **无服务器架构**：运行在 Cloudflare Workers 上，低成本且高可用。
-- **双向消息转发**：将用户发送给机器人的消息转发给管理员,管理员回复信息再转回给用户。
-- **防骚扰与反诈骗**：
-  - **关键词过滤**：自动丢弃包含黑名单关键词（如 '刷单', '兼职', 'USDT'）的消息。
-  - **媒体验证**：未验证用户无法发送媒体（图片、视频）。他们必须通过“我是真人”按钮验证后方可发送。
-  - **消息去重**：防止 7 天内的重复消息。
-  - **屏蔽/信任系统**：管理员可以屏蔽用户 (`/block`) 或将其加入白名单 (`/trust`)。
+- **Serverless Architecture**: Runs on Cloudflare Workers, low cost and high availability.
+- **Message Forwarding**: Forwards messages from users to admins and vice versa.
+- **Operating Modes**:
+  - **Private Chat Mode**: One-on-one forwarding, simple and lightweight.
+  - **Topic Group Mode**: Creates separate topics for each user, supporting high-volume management.
+- **Anti-Spam & Anti-Scam**:
+  - **Keyword Filtering**: Automatically drops messages containing blacklisted keywords (e.g., 'scam', 'USDT').
+  - **Dynamic Math Verification**: Unverified users must solve a random math problem (e.g., 3+5=?) to send media, effectively blocking bots.
+  - **Security Levels**: Supports dynamic switching between Strict (mute), Standard (no media), and Relaxed (no verification) modes.
+  - **Deduplication**: Prevents duplicate messages within 7 days.
+  - **Block/Trust System**: Admins can shadowban (`/block`) or whitelist (`/trust`) users.
+- **Management Tools**:
+  - **Broadcast**: Reply to a message to broadcast it to all users.
+  - **Admin Menu**: Visual `/admin` panel for quick operations.
+  - **Service Message Filtering**: Automatically ignores system messages like join/leave events.
 
-## 部署到 Cloudflare Workers
+## Deploy to Cloudflare Workers
 
 <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/tanaer/Telegram_MirroTalk">
   <img src="https://camo.githubusercontent.com/aa3de9a0130879a84691a2286f5302105d5f3554c5d0af4e3f2f24174eeeea25/68747470733a2f2f6465706c6f792e776f726b6572732e636c6f7564666c6172652e636f6d2f627574746f6e" alt="Deploy to Cloudflare Workers" />
