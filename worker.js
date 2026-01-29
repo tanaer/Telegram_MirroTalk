@@ -29,6 +29,10 @@ const DEDUPE_TTL = 7 * 24 * 3600;
 // 4. 验证状态过期时间 (秒)，默认 30 天
 const VERIFIED_TTL = 30 * 24 * 3600;
 
+// 5. 消息映射过期时间 (秒)，从环境变量读取，默认 7 天
+const MAP_TTL_DAYS = (typeof ENV_MAP_TTL_DAYS !== 'undefined') ? parseInt(ENV_MAP_TTL_DAYS) : 7;
+const MAP_TTL = MAP_TTL_DAYS * 24 * 3600;
+
 // 安全级别定义
 const SECURITY_STRICT = 1;   // 未验证 -> 不转发任何信息
 const SECURITY_STANDARD = 2; // 未验证 -> 可发文字，不可发媒体 (默认)
@@ -151,6 +155,30 @@ function deleteMessage(chat_id, message_id) {
     return requestTelegram('deleteMessage', makeReqBody({ chat_id, message_id }));
 }
 
+let cachedMode = null;
+let cachedModeAt = 0;
+const MODE_CACHE_MS = 15000;
+
+async function getTopicModeEnabled() {
+    const now = Date.now();
+    if (cachedMode !== null && (now - cachedModeAt) < MODE_CACHE_MS) return cachedMode;
+
+    const v = await MirroTalk.get('config:enable_topic_group');
+    if (v === null) {
+        cachedMode = ENABLE_TOPIC_GROUP;
+    } else {
+        cachedMode = v === 'true';
+    }
+    cachedModeAt = now;
+    return cachedMode;
+}
+
+async function setTopicModeEnabled(enabled) {
+    await MirroTalk.put('config:enable_topic_group', enabled ? 'true' : 'false');
+    cachedMode = enabled;
+    cachedModeAt = Date.now();
+}
+
 addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (url.pathname === WEBHOOK) {
@@ -196,17 +224,22 @@ async function onMessage(message) {
     
     // 如果是管理员，显示更详细的帮助信息
     if (message.chat.id.toString() === ADMIN_UID) {
-        startMsg += `\n\n<b>Admin Control Panel</b>\nUID: ${message.chat.id}\n`;
-        startMsg += `Mode: ${ENABLE_TOPIC_GROUP ? 'Topic Group (话题模式)' : 'Private Chat (私聊模式)'}\n`;
+        const topicMode = await getTopicModeEnabled();
+        startMsg += `
+
+<b>Admin Control Panel</b>
+UID: ${message.chat.id}
+`;
+        startMsg += `Mode: ${topicMode ? 'Topic Group (话题模式)' : 'Private Chat (私聊模式)'}\n`;
         
-        if (ENABLE_TOPIC_GROUP) {
+        if (topicMode) {
             startMsg += `Supergroup ID: ${SUPERGROUP_ID || 'Not Set ⚠️'}\n`;
             if (!SUPERGROUP_ID) {
                 startMsg += `\n⚠️ <b>配置警告</b>: 您开启了话题模式，但未设置 ENV_SUPERGROUP_ID。\n请在 Cloudflare 环境变量中填入超级群组 ID (以 -100 开头)。\n`;
             }
         }
         
-        startMsg += `\n发送 /admin 查看完整管理菜单。`;
+        startMsg += `\n发送 /admin 或 /help 查看完整管理菜单。`;
     } else {
         startMsg += `\n\nYour UID: ${message.chat.id}`;
     }
@@ -223,34 +256,88 @@ async function onMessage(message) {
   // 2. 来自管理员私聊 (ADMIN_UID) -> 管理员私聊操作 (或者兼容旧模式回复)
   // 3. 其他 -> 普通用户投稿
   
-  if (ENABLE_TOPIC_GROUP && message.chat.id.toString() === SUPERGROUP_ID) {
-    if (!message.from || message.from.id.toString() !== ADMIN_UID) {
-      return new Response('Ok');
-    }
-    return handleAdminMessage(message);
-  } else if (!ENABLE_TOPIC_GROUP && message.chat.id.toString() === ADMIN_UID) {
-    // 旧模式：管理员在私聊中回复
-    return handleAdminMessage(message);
-  } else if (message.chat.id.toString() === ADMIN_UID) {
-    // 即使在话题模式下，管理员私聊也应该被视为管理员操作，或者至少不应该被当成普通用户去验证
-    // 这里简单处理：如果是 ADMIN_UID 私聊，但没开 Topic 模式 (上面已处理)
-    // 如果开了 Topic 模式，ADMIN_UID 私聊也走 Admin 逻辑，方便测试指令
-    return handleAdminMessage(message);
-  } else {
-    // 可以在这里加个判断，如果普通用户 ID === ADMIN_UID 且不是在回复，是否要特殊处理？
-    return handleGuestMessage(message);
+  if (SUPERGROUP_ID && message.chat.id.toString() === SUPERGROUP_ID) {
+    const fromAdmin = message.from && message.from.id && message.from.id.toString() === ADMIN_UID;
+    const anonymousAdmin = message.sender_chat && message.sender_chat.id && message.sender_chat.id.toString() === SUPERGROUP_ID;
+    if (fromAdmin || anonymousAdmin) return handleAdminMessage(message);
+    return new Response('Ok');
   }
+
+  if (message.chat.id.toString() === ADMIN_UID) {
+    return handleAdminMessage(message);
+  }
+
+  return handleGuestMessage(message);
 }
 
 // --- 管理员逻辑 ---
 async function handleAdminMessage(message) {
     // 1. 处理指令
     if (message.text) {
+        if (message.text.startsWith('/help')) {
+            return handleAdminMenu(message);
+        }
+        if (message.text.startsWith('/mode')) {
+            const topicMode = await getTopicModeEnabled();
+            const parts = message.text.trim().split(/\s+/);
+
+            if (parts.length === 1) {
+                const modeText = topicMode ? '话题群组模式' : '私聊模式';
+                return sendMessage({
+                    chat_id: message.chat.id,
+                    text: `当前模式：<b>${modeText}</b>
+
+切换：
+<code>/mode private</code>
+<code>/mode topic</code>`,
+                    parse_mode: 'HTML',
+                    message_thread_id: message.message_thread_id
+                });
+            }
+
+            const v = parts[1].toLowerCase();
+            if (v === 'private') {
+                await setTopicModeEnabled(false);
+                return sendMessage({
+                    chat_id: message.chat.id,
+                    text: '✅ 已切换为：<b>私聊模式</b>',
+                    parse_mode: 'HTML',
+                    message_thread_id: message.message_thread_id
+                });
+            }
+            if (v === 'topic') {
+                if (!SUPERGROUP_ID) {
+                    return sendMessage({
+                        chat_id: message.chat.id,
+                        text: '⚠️ 未配置 ENV_SUPERGROUP_ID，无法开启话题群组模式。',
+                        message_thread_id: message.message_thread_id
+                    });
+                }
+                await setTopicModeEnabled(true);
+                return sendMessage({
+                    chat_id: message.chat.id,
+                    text: '✅ 已切换为：<b>话题群组模式</b>',
+                    parse_mode: 'HTML',
+                    message_thread_id: message.message_thread_id
+                });
+            }
+            return sendMessage({
+                chat_id: message.chat.id,
+                text: '⚠️ 参数错误：请使用 /mode private 或 /mode topic',
+                message_thread_id: message.message_thread_id
+            });
+        }
         if (message.text.startsWith('/info')) {
             return handleInfoCommand(message);
         }
         if (message.text.startsWith('/trust')) {
             return handleTrustCommand(message);
+        }
+        if (message.text.startsWith('/block')) {
+            return handleBlockCommand(message);
+        }
+        if (message.text.startsWith('/unblock')) {
+            return handleUnblockCommand(message);
         }
         if (message.text.startsWith('/security')) {
             return handleSecurityCommand(message);
@@ -264,12 +351,16 @@ async function handleAdminMessage(message) {
     }
 
     // 2. 处理回复
-    if (ENABLE_TOPIC_GROUP) {
+    const topicMode = await getTopicModeEnabled();
+    
+    // 如果是在超级群组的话题中回复 -> 走话题逻辑
+    if (topicMode && SUPERGROUP_ID && message.chat.id.toString() === SUPERGROUP_ID && message.message_thread_id) {
         const topicId = message.message_thread_id;
         if (topicId) {
             let userId = await MirroTalk.get(`thread:${topicId}:user`);
             if ((!userId || userId.toString() === ADMIN_UID) && message.reply_to_message) {
-                const byMsgMap = await MirroTalk.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
+                // 尝试回退到 msg-map 解析
+                const byMsgMap = await MirroTalk.get('msg-map-' + message.reply_to_message.message_id);
                 if (byMsgMap) {
                     userId = byMsgMap;
                     await MirroTalk.put(`thread:${topicId}:user`, userId);
@@ -286,22 +377,37 @@ async function handleAdminMessage(message) {
             }
 
             return sendMessage({
-                chat_id: SUPERGROUP_ID,
+                chat_id: message.chat.id,
                 text: '⚠️ 该话题尚未绑定用户或映射异常。请先在本话题里回复一条“来自该用户的转发消息”发送任意内容，系统会自动完成绑定，之后即可自由聊天。',
                 message_thread_id: topicId
             });
         }
     } else {
-        // 私聊模式：回复转发的消息
+        // 私聊模式（或者在话题群组中未开启话题模式，或者在私聊中）：回复转发的消息
+        // 只要是回复消息，且能找到 msg-map，就尝试转发
         if (message.reply_to_message) {
             // 尝试从 msg-map 获取
-             let guestChatId = await MirroTalk.get('msg-map-' + message.reply_to_message.message_id, { type: "json" })
+             const mapKey = 'msg-map-' + message.reply_to_message.message_id;
+             let guestChatId = await MirroTalk.get(mapKey); // 默认返回 text
+             
+             console.log(`[Log] Reply lookup: ${mapKey} -> ${guestChatId}`);
+
              if (guestChatId) {
                 return copyMessage({
                   chat_id: guestChatId,
-                  from_chat_id:message.chat.id,
-                  message_id:message.message_id,
-                })
+                  from_chat_id: message.chat.id,
+                  message_id: message.message_id,
+                });
+            } else {
+                // 调试信息：如果找不到映射，可能是过期了或者 KV 读取问题
+                // 仅在私聊中提示，避免群组刷屏
+                if (message.chat.id.toString() === ADMIN_UID) {
+                     return sendMessage({
+                        chat_id: message.chat.id,
+                        text: '⚠️ 无法找到该消息的原始发送者 (可能已过期或未记录)',
+                        reply_to_message_id: message.message_id
+                    });
+                }
             }
         }
     }
@@ -311,19 +417,22 @@ async function handleAdminMessage(message) {
 async function handleGuestMessage(message) {
     const chatId = message.chat.id;
 
-    // 1. 黑名单检查
-    const isblocked = await MirroTalk.get('isblocked-' + chatId, { type: "json" });
-    if (isblocked) return new Response('Ok');
+    // 1. 验证与黑名单状态检查
+    const verifiedStatus = await MirroTalk.get(`verified-${chatId}`);
+    const isVerified = (verifiedStatus === 'true' || verifiedStatus === 'trusted');
+    const isBlocked = await MirroTalk.get(`isblocked-${chatId}`);
+
+    // 如果用户被屏蔽，且不是“永久信任”状态，则直接拦截
+    // 注意：trusted 权限高于 blocked，方便管理员纠错
+    if (isBlocked && verifiedStatus !== 'trusted') {
+        return new Response('Ok');
+    }
 
     // 2. 获取安全级别
     let securityLevel = await MirroTalk.get('config:security_level', { type: "json" });
     if (securityLevel === null) securityLevel = DEFAULT_SECURITY_LEVEL;
 
-    // 3. 检查验证状态
-    const verifiedStatus = await MirroTalk.get(`verified-${chatId}`);
-    const isVerified = (verifiedStatus === 'true' || verifiedStatus === 'trusted');
-
-    // 4. 根据安全级别判断是否允许
+    // 3. 根据安全级别判断是否允许
     let allowed = false;
     const isText = !!message.text;
 
@@ -349,22 +458,32 @@ async function handleGuestMessage(message) {
     // 6. 允许通过 -> 转发逻辑
     // 6.1 关键词/去重检查 (仅针对文本)
     if (message.text) {
-        // 关键词拦截
-        const hasBadWord = BLACKLIST_KEYWORDS.some(keyword => message.text.includes(keyword));
-        if (hasBadWord) return new Response('Ok');
+        // 关键词拦截 (信任用户豁免关键词拦截，防止误伤)
+        if (verifiedStatus !== 'trusted') {
+            const hasBadWord = BLACKLIST_KEYWORDS.some(keyword => message.text.includes(keyword));
+            if (hasBadWord) return new Response('Ok');
+        }
 
-        // 去重
+        // 去重检查
         const hash = await sha256(message.text.trim());
         const seen = await MirroTalk.get('msg-hash-' + hash);
-        if (seen) return new Response('Ok');
+        
+        // 如果是重复消息，且不是永久信任用户，则拦截
+        if (seen && verifiedStatus !== 'trusted') {
+            return new Response('Ok');
+        }
+        
+        // 记录哈希
         await MirroTalk.put('msg-hash-' + hash, '1', { expirationTtl: DEDUPE_TTL });
     }
+
+    const topicMode = await getTopicModeEnabled();
 
     // 6.2 获取或创建话题
     let topicId = null;
     let forwardChatId = ADMIN_UID; // 默认转发给管理员私聊
 
-    if (ENABLE_TOPIC_GROUP) {
+    if (topicMode && SUPERGROUP_ID) {
         forwardChatId = SUPERGROUP_ID; // 话题模式下转发给超级群组
         topicId = await MirroTalk.get(`user:${chatId}:topic`);
         
@@ -392,7 +511,11 @@ async function handleGuestMessage(message) {
                 // 这里选择发给 SUPERGROUP_ID 的 General (topicId 为空即 General)
                 await sendMessage({
                     chat_id: SUPERGROUP_ID,
-                    text: `⚠️ <b>话题创建失败</b>\nUID: ${chatId}\nError: ${topicRes.description || 'Unknown error'}\n\n请检查机器人是否为群组管理员，且拥有"管理话题"权限。`,
+                    text: `⚠️ <b>话题创建失败</b>
+UID: ${chatId}
+Error: ${topicRes.description || 'Unknown error'}
+
+请检查机器人是否为群组管理员，且拥有"管理话题"权限。`,
                     parse_mode: 'HTML'
                 });
 
@@ -402,7 +525,7 @@ async function handleGuestMessage(message) {
         }
     }
 
-    // 6.3 转发消息
+    // 6.3 转发消息 (使用 copyMessage 替代 forwardMessage 以绕过用户隐私设置限制)
     const forwardBody = {
         chat_id: forwardChatId,
         from_chat_id: chatId,
@@ -412,9 +535,27 @@ async function handleGuestMessage(message) {
         forwardBody.message_thread_id = topicId;
     }
 
-    const forwardReq = await forwardMessage(forwardBody);
+    // 使用 copyMessage 更稳健，能穿透发送者的“禁止转发”隐私设置
+    const forwardReq = await copyMessage(forwardBody);
     if (forwardReq.ok) {
-        await MirroTalk.put('msg-map-' + forwardReq.result.message_id, chatId, { expirationTtl: MAP_TTL });
+        // 显式转为字符串存储，防止 KV 存储数字出错
+        // 注意：forwardReq.result.message_id 是转发后的新消息 ID (在管理员私聊或群组中)
+        // 我们需要用这个 ID 映射回原始用户的 chatId
+        await MirroTalk.put('msg-map-' + forwardReq.result.message_id, String(chatId), { expirationTtl: MAP_TTL });
+        
+        // 如果是话题模式且在群组中，确保话题映射也被记录或刷新（冗余保险）
+        if (topicId && SUPERGROUP_ID && forwardChatId === SUPERGROUP_ID) {
+            await MirroTalk.put(`thread:${topicId}:user`, String(chatId));
+            await MirroTalk.put(`user:${chatId}:topic`, String(topicId));
+        }
+    } else {
+        console.error('Forward/Copy message failed:', JSON.stringify(forwardReq));
+        // 如果失败且是管理员操作，反馈失败原因
+        await sendMessage({
+            chat_id: ADMIN_UID,
+            text: `❌ <b>消息转发失败</b>\n目标 UID: ${chatId}\n原因: ${forwardReq.description || '未知错误'}`,
+            parse_mode: 'HTML'
+        });
     }
 }
 
@@ -454,7 +595,13 @@ async function sendVerificationChallenge(chatId, pendingMsgId) {
 
     await sendMessage({
         chat_id: chatId,
-        text: `🔒 <b>身份验证 / Verification</b>\n\n问题：${question.question}\nQuestion: ${question.question}\n\n(验证通过后请重新发送刚才的消息)\n(Please resend your message after verification)`,
+        text: `🔒 <b>身份验证 / Verification</b>
+
+问题：${question.question}
+Question: ${question.question}
+
+(验证通过后请重新发送刚才的消息)
+(Please resend your message after verification)`,
         parse_mode: 'HTML',
         reply_to_message_id: pendingMsgId,
         reply_markup: { inline_keyboard }
@@ -504,52 +651,123 @@ async function handleCallback(callbackQuery) {
 
 // --- 指令处理函数 ---
 
-async function handleInfoCommand(message) {
+/**
+ * 助手函数：获取指令目标用户 ID
+ * 逻辑：优先通过话题 ID 获取，其次通过回复的消息获取
+ */
+async function getTargetUserId(message) {
+    // 1. 话题模式：优先从话题绑定关系中获取
     const topicId = message.message_thread_id;
-    if (!topicId) {
-        return sendMessage({ chat_id: SUPERGROUP_ID, text: '请在话题中使用此指令。' });
+    if (topicId) {
+        const userId = await MirroTalk.get(`thread:${topicId}:user`);
+        if (userId) return userId;
     }
 
-    const userId = await MirroTalk.get(`thread:${topicId}:user`);
+    // 2. 通用/私聊模式：通过回复转发的消息来获取
+    if (message.reply_to_message) {
+        const userId = await MirroTalk.get('msg-map-' + message.reply_to_message.message_id);
+        if (userId) return userId;
+    }
+
+    return null;
+}
+
+async function handleInfoCommand(message) {
+    const userId = await getTargetUserId(message);
     if (!userId) {
-        return sendMessage({ chat_id: SUPERGROUP_ID, text: '无法找到当前话题对应的用户。', message_thread_id: topicId });
+        return sendMessage({ 
+            chat_id: message.chat.id, 
+            text: '⚠️ 无法识别目标用户。请在话题内发送，或在私聊中回复一条转发的消息。', 
+            message_thread_id: message.message_thread_id 
+        });
     }
 
     const verifiedStatus = await MirroTalk.get(`verified-${userId}`);
+    const isBlocked = await MirroTalk.get(`isblocked-${userId}`);
+    
     let statusText = "❌ 未验证";
-    if (verifiedStatus === 'trusted') statusText = "🌟 永久信任";
+    if (isBlocked) statusText = "🚫 已屏蔽";
+    else if (verifiedStatus === 'trusted') statusText = "🌟 永久信任";
     else if (verifiedStatus === 'true') statusText = "✅ 已验证";
 
     const text = `
 ℹ️ <b>用户信息</b>
 UID: <code>${userId}</code>
-Topic ID: <code>${topicId}</code>
 Status: ${statusText}
 Link: <a href="tg://user?id=${userId}">点击私聊</a>
     `.trim();
 
     return sendMessage({
-        chat_id: SUPERGROUP_ID,
+        chat_id: message.chat.id,
         text: text,
         parse_mode: 'HTML',
-        message_thread_id: topicId
+        message_thread_id: message.message_thread_id
     });
 }
 
 async function handleTrustCommand(message) {
-    const topicId = message.message_thread_id;
-    if (!topicId) return;
-
-    const userId = await MirroTalk.get(`thread:${topicId}:user`);
-    if (userId) {
-        await MirroTalk.put(`verified-${userId}`, 'trusted'); // 永久信任 (不设 TTL)
-        return sendMessage({
-            chat_id: SUPERGROUP_ID,
-            text: '🌟 <b>已设置永久信任</b>\n该用户将免除验证。',
-            parse_mode: 'HTML',
-            message_thread_id: topicId
+    const userId = await getTargetUserId(message);
+    if (!userId) {
+        return sendMessage({ 
+            chat_id: message.chat.id, 
+            text: '⚠️ 无法识别目标用户。请在话题内发送，或在私聊中回复一条转发的消息。', 
+            message_thread_id: message.message_thread_id 
         });
     }
+
+    // 1. 设置永久信任
+    await MirroTalk.put(`verified-${userId}`, 'trusted');
+    // 2. 同时解除屏蔽状态 (如果存在)，确保互斥逻辑
+    await MirroTalk.delete(`isblocked-${userId}`);
+
+    return sendMessage({
+        chat_id: message.chat.id,
+        text: `🌟 <b>已设置永久信任</b>\n用户 <code>${userId}</code> 将免除验证并移出黑名单。`,
+        parse_mode: 'HTML',
+        message_thread_id: message.message_thread_id
+    });
+}
+
+async function handleBlockCommand(message) {
+    const userId = await getTargetUserId(message);
+    if (!userId) {
+        return sendMessage({ 
+            chat_id: message.chat.id, 
+            text: '⚠️ 无法识别目标用户。请在话题内发送，或在私聊中回复一条转发的消息。', 
+            message_thread_id: message.message_thread_id 
+        });
+    }
+
+    // 1. 设置屏蔽状态
+    await MirroTalk.put(`isblocked-${userId}`, 'true');
+    // 2. 同时清除验证/信任状态，确保屏蔽绝对生效
+    await MirroTalk.delete(`verified-${userId}`);
+
+    return sendMessage({
+        chat_id: message.chat.id,
+        text: `🚫 <b>已屏蔽用户</b>\n用户 <code>${userId}</code> 已进入黑名单并清除信任状态。`,
+        parse_mode: 'HTML',
+        message_thread_id: message.message_thread_id
+    });
+}
+
+async function handleUnblockCommand(message) {
+    const userId = await getTargetUserId(message);
+    if (!userId) {
+        return sendMessage({ 
+            chat_id: message.chat.id, 
+            text: '⚠️ 无法识别目标用户。请在话题内发送，或在私聊中回复一条转发的消息。', 
+            message_thread_id: message.message_thread_id 
+        });
+    }
+
+    await MirroTalk.delete(`isblocked-${userId}`);
+    return sendMessage({
+        chat_id: message.chat.id,
+        text: `✅ <b>已解除屏蔽</b>\n用户 <code>${userId}</code> 已恢复正常状态。`,
+        parse_mode: 'HTML',
+        message_thread_id: message.message_thread_id
+    });
 }
 
 async function handleSecurityCommand(message) {
@@ -560,22 +778,27 @@ async function handleSecurityCommand(message) {
         if(!current) current = DEFAULT_SECURITY_LEVEL;
         
         return sendMessage({
-            chat_id: SUPERGROUP_ID,
-            text: `当前安全级别: ${current}\n\n设置方法: /security <1|2|3>\n1: 严格 (未验证禁言)\n2: 标准 (未验证仅文本)\n3: 宽松 (未验证可发媒体)`,
+            chat_id: message.chat.id,
+            text: `当前安全级别: ${current}
+
+设置方法: /security <1|2|3>
+1: 严格 (未验证禁言)
+2: 标准 (未验证仅文本)
+3: 宽松 (未验证可发媒体)`,
             message_thread_id: message.message_thread_id
         });
     }
 
     const level = parseInt(args[1]);
     if (![1, 2, 3].includes(level)) {
-        return sendMessage({ chat_id: SUPERGROUP_ID, text: '无效级别。请使用 1, 2, 或 3。', message_thread_id: message.message_thread_id });
+        return sendMessage({ chat_id: message.chat.id, text: '无效级别。请使用 1, 2, 或 3。', message_thread_id: message.message_thread_id });
     }
 
     await MirroTalk.put('config:security_level', level);
     
     const names = { 1: '严格模式', 2: '标准模式', 3: '宽松模式' };
     return sendMessage({
-        chat_id: SUPERGROUP_ID,
+        chat_id: message.chat.id,
         text: `✅ 安全级别已设置为: <b>${names[level]}</b>`,
         parse_mode: 'HTML',
         message_thread_id: message.message_thread_id
@@ -586,13 +809,16 @@ async function handleAdminMenu(message) {
     // 获取当前安全级别
     let current = await MirroTalk.get('config:security_level');
     if (!current) current = DEFAULT_SECURITY_LEVEL;
+    const topicMode = await getTopicModeEnabled();
     
     const names = { 1: 'Strict', 2: 'Standard', 3: 'Relaxed' };
+    const modeText = topicMode ? 'Topic Group (话题模式)' : 'Private Chat (私聊模式)';
     
     const text = `
 🛠 <b>管理员菜单 / Admin Menu</b>
 
 <b>当前设置 (Current Settings):</b>
+- 🧭 模式: <b>${modeText}</b>
 - 🛡 安全级别: <b>${names[current]}</b> (${current})
 
 <b>可用指令 (Available Commands):</b>
@@ -604,6 +830,7 @@ async function handleAdminMenu(message) {
 <code>/unblock</code> - 解除屏蔽
 
 🔹 <b>系统设置</b>
+<code>/mode</code> - 查看/切换模式 (private/topic)
 <code>/security 1</code> - 严格模式 (未验证禁言)
 <code>/security 2</code> - 标准模式 (仅限文字)
 <code>/security 3</code> - 宽松模式 (允许媒体)
@@ -613,7 +840,7 @@ async function handleAdminMenu(message) {
     `.trim();
 
     return sendMessage({
-        chat_id: SUPERGROUP_ID,
+        chat_id: message.chat.id,
         text: text,
         parse_mode: 'HTML',
         message_thread_id: message.message_thread_id
@@ -624,7 +851,7 @@ async function handleBroadcastCommand(message) {
     // 检查是否回复了消息
     if (!message.reply_to_message) {
         return sendMessage({
-            chat_id: SUPERGROUP_ID,
+            chat_id: message.chat.id,
             text: '⚠️ <b>使用错误</b>\n\n请回复一条您想要广播的消息，并输入 <code>/broadcast</code>',
             parse_mode: 'HTML',
             message_thread_id: message.message_thread_id
@@ -635,7 +862,7 @@ async function handleBroadcastCommand(message) {
     
     // 确认开始
     await sendMessage({
-        chat_id: SUPERGROUP_ID,
+        chat_id: message.chat.id,
         text: `📢 <b>正在开始广播...</b>\n\n目标：所有用户`,
         parse_mode: 'HTML',
         message_thread_id: message.message_thread_id
@@ -683,7 +910,7 @@ async function handleBroadcastCommand(message) {
 
         // 广播完成报告
         return sendMessage({
-            chat_id: SUPERGROUP_ID,
+            chat_id: message.chat.id,
             text: `✅ <b>广播完成</b>\n\n成功发送: ${sentCount} 人\n失败: ${failCount} 人`,
             parse_mode: 'HTML',
             message_thread_id: message.message_thread_id
@@ -691,7 +918,7 @@ async function handleBroadcastCommand(message) {
 
     } catch (e) {
         return sendMessage({
-            chat_id: SUPERGROUP_ID,
+            chat_id: message.chat.id,
             text: `❌ <b>广播过程中出错</b>\n\n${e.message}`,
             parse_mode: 'HTML',
             message_thread_id: message.message_thread_id
