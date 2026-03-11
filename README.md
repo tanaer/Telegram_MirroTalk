@@ -33,7 +33,7 @@
 需要以下环境变量（可以在 `wrangler.toml` 中填写或在部署时配置）：
 
 - `ENV_BOT_TOKEN`: 你的 Telegram 机器人 Token (从 @BotFather 获取)。
-- `ENV_BOT_SECRET`: 用于 Webhook 安全验证的随机字符串 (例如 UUID)。
+- `ENV_BOT_SECRET`: (可选) 用于 Webhook 安全验证的随机字符串。如果留空，系统将自动生成 UUID 并保存在 KV 中。
 - `ENV_ADMIN_UID`: 你的 Telegram 用户 ID (从 @userinfobot 获取)。用于接收通知。
 - `ENV_SUPERGROUP_ID`: 你的超级群组 ID (以 `-100` 开头)。仅在 `ENV_ENABLE_TOPIC_GROUP` 为 `true` 时需要。
 - `ENV_ENABLE_TOPIC_GROUP` (可选): 设置为 `true` 以开启话题群组模式。默认为 `false` (私聊模式)。

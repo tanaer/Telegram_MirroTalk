@@ -43,7 +43,7 @@ A Telegram message forwarding bot running on Cloudflare Workers, with anti-spam 
 需要以下环境变量（可以在 `wrangler.toml` 中填写或在部署时配置）：
 
 - `ENV_BOT_TOKEN`: Your Telegram Bot Token (from @BotFather).
-- `ENV_BOT_SECRET`: A random string for Webhook security (e.g., UUID).
+- `ENV_BOT_SECRET`: (Optional) A random string for Webhook security. If left empty, the system will automatically generate a UUID and store it in KV.
 - `ENV_ADMIN_UID`: Your Telegram User ID (from @userinfobot). Used for receiving admin notifications.
 - `ENV_SUPERGROUP_ID`: The ID of the Supergroup where the bot will create topics (starts with `-100`). Required only if `ENV_ENABLE_TOPIC_GROUP` is `true`.
 - `ENV_ENABLE_TOPIC_GROUP` (Optional): Set to `true` to enable Topic Group mode. Default is `false` (Private Chat mode).

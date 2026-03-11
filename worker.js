@@ -1,8 +1,26 @@
 const TOKEN = ENV_BOT_TOKEN; // Get it from @BotFather
 const WEBHOOK = '/endpoint';
-const SECRET = ENV_BOT_SECRET;
 const ADMIN_UID = ENV_ADMIN_UID; // 管理员的用户 ID (用于接收私聊通知/指令)
 // 模式开关: 是否开启群组话题模式
+
+let cachedSecret = null;
+async function getBotSecret() {
+    if (cachedSecret) return cachedSecret;
+    if (typeof ENV_BOT_SECRET !== 'undefined' && ENV_BOT_SECRET) {
+        cachedSecret = ENV_BOT_SECRET;
+        return cachedSecret;
+    }
+    const kvSecret = await MirroTalk.get('system:bot_secret');
+    if (kvSecret) {
+        cachedSecret = kvSecret;
+        return cachedSecret;
+    }
+    const newSecret = crypto.randomUUID().replace(/-/g, '');
+    await MirroTalk.put('system:bot_secret', newSecret);
+    cachedSecret = newSecret;
+    return cachedSecret;
+}
+
 const ENABLE_TOPIC_GROUP = (typeof ENV_ENABLE_TOPIC_GROUP !== 'undefined') && (ENV_ENABLE_TOPIC_GROUP === 'true');
 // 如果开启了话题模式，则必须配置 SUPERGROUP_ID
 const SUPERGROUP_ID = (typeof ENV_SUPERGROUP_ID !== 'undefined') ? ENV_SUPERGROUP_ID : ''; 
@@ -184,7 +202,10 @@ addEventListener('fetch', event => {
   if (url.pathname === WEBHOOK) {
     event.respondWith(handleWebhook(event));
   } else if (url.pathname === '/registerWebhook') {
-    event.respondWith(registerWebhook(event, url, WEBHOOK, SECRET));
+    event.respondWith((async () => {
+      const secret = await getBotSecret();
+      return registerWebhook(event, url, WEBHOOK, secret);
+    })());
   } else if (url.pathname === '/unRegisterWebhook') {
     event.respondWith(unRegisterWebhook(event));
   } else {
@@ -193,7 +214,8 @@ addEventListener('fetch', event => {
 });
 
 async function handleWebhook(event) {
-  if (event.request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== SECRET) {
+  const secret = await getBotSecret();
+  if (event.request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== secret) {
     return new Response('Unauthorized', { status: 403 });
   }
   const update = await event.request.json();

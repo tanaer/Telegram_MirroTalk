@@ -13,7 +13,7 @@ id = "YOUR_KV_NAMESPACE_ID"
 # Telegram Bot Token from @BotFather
 ENV_BOT_TOKEN = ""
 
-# A secret token for securing the webhook (random string)
+# A secret token for securing the webhook. Optional: if left empty, a UUID will be auto-generated and saved to KV.
 ENV_BOT_SECRET = ""
 
 # Your Telegram User ID (get from @userinfobot)
